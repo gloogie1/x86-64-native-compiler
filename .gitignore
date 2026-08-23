@@ -1,0 +1,22 @@
+# Build output
+/build/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+
+# Ninja
+.ninja_deps
+.ninja_log
+
+# Editor/OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Temporary files
+tmp.txt
