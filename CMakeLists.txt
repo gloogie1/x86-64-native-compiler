@@ -15,6 +15,7 @@ add_library(
     src/source/source_file.cpp
     src/lexer/token.cpp
     src/lexer/lexer.cpp
+    src/parser/parser.cpp
 )
 
 target_include_directories(
@@ -96,6 +97,8 @@ if(BUILD_TESTING)
 
     FetchContent_MakeAvailable(googletest)
 
+    include(GoogleTest)
+
     # Lexer tests
     add_executable(
         lexer_tests
@@ -119,7 +122,31 @@ if(BUILD_TESTING)
             -Wsign-conversion
     )
 
-    include(GoogleTest)
     gtest_discover_tests(lexer_tests)
+
+    # Parser tests
+    add_executable(
+        parser_tests
+        tests/parser_tests.cpp
+    )
+
+    target_link_libraries(
+        parser_tests
+        PRIVATE
+            compiler_core
+            GTest::gtest_main
+    )
+
+    target_compile_options(
+        parser_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wsign-conversion
+    )
+
+    gtest_discover_tests(parser_tests)
 
 endif()
