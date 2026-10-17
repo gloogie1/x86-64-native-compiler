@@ -44,6 +44,13 @@ compiler::ExprParseResult parse_test_expression(std::string_view text) {
     return parser.parse_expression();
 }
 
+compiler::ProgramParseResult parse_test_program(std::string_view text) {
+    compiler::SourceFile source{"test.xc", std::string{text}};
+    std::vector<compiler::Token> tokens = lex_source(source);
+    compiler::Parser parser{source, std::move(tokens)};
+    return parser.parse_program();
+}
+
 TEST(ParserTest, IntegerLiteral) {
     auto result = parse_test_expression("42");
 
@@ -967,4 +974,912 @@ TEST(ParserTest, MissingUnaryOperand) {
     EXPECT_EQ(error.message, "expected expression");
     EXPECT_EQ(error.span.begin, 1);
     EXPECT_EQ(error.span.end, 1);
+}
+
+TEST(ParserTest, CallNoArguments) {
+    const std::string_view input = "foo()";
+
+    compiler::ExprParseResult result =
+        parse_test_expression(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<std::unique_ptr<compiler::Expr>>(result)
+    );
+
+    const auto& expr =
+        std::get<std::unique_ptr<compiler::Expr>>(result);
+
+    auto* call =
+        dynamic_cast<compiler::CallExpr*>(expr.get());
+
+    ASSERT_NE(call, nullptr);
+
+    EXPECT_EQ(call->callee, "foo");
+    EXPECT_TRUE(call->arguments.empty());
+    EXPECT_EQ(call->span.begin, 0);
+    EXPECT_EQ(call->span.end, 5);
+}
+
+
+TEST(ParserTest, CallMultipleArguments) {
+    const std::string_view input =
+        "foo(1, 2 + 3, true)";
+
+    compiler::ExprParseResult result =
+        parse_test_expression(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<std::unique_ptr<compiler::Expr>>(result)
+    );
+
+    const auto& expr =
+        std::get<std::unique_ptr<compiler::Expr>>(result);
+
+    auto* call =
+        dynamic_cast<compiler::CallExpr*>(expr.get());
+
+    ASSERT_NE(call, nullptr);
+
+    EXPECT_EQ(call->callee, "foo");
+    ASSERT_EQ(call->arguments.size(), 3);
+
+    auto* first =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            call->arguments[0].get()
+        );
+
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->value, 1);
+
+    auto* second =
+        dynamic_cast<compiler::BinaryExpr*>(
+            call->arguments[1].get()
+        );
+
+    ASSERT_NE(second, nullptr);
+    EXPECT_EQ(second->op, compiler::BinaryOp::Add);
+
+    auto* second_left =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            second->left.get()
+        );
+
+    auto* second_right =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            second->right.get()
+        );
+
+    ASSERT_NE(second_left, nullptr);
+    ASSERT_NE(second_right, nullptr);
+
+    EXPECT_EQ(second_left->value, 2);
+    EXPECT_EQ(second_right->value, 3);
+
+    auto* third =
+        dynamic_cast<compiler::BoolLiteralExpr*>(
+            call->arguments[2].get()
+        );
+
+    ASSERT_NE(third, nullptr);
+    EXPECT_TRUE(third->value);
+}
+
+
+TEST(ParserTest, CallPrecedence) {
+    const std::string_view input =
+        "foo(1) + 2";
+
+    compiler::ExprParseResult result =
+        parse_test_expression(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<std::unique_ptr<compiler::Expr>>(result)
+    );
+
+    const auto& expr =
+        std::get<std::unique_ptr<compiler::Expr>>(result);
+
+    auto* binary =
+        dynamic_cast<compiler::BinaryExpr*>(expr.get());
+
+    ASSERT_NE(binary, nullptr);
+    EXPECT_EQ(binary->op, compiler::BinaryOp::Add);
+
+    auto* call =
+        dynamic_cast<compiler::CallExpr*>(
+            binary->left.get()
+        );
+
+    ASSERT_NE(call, nullptr);
+    EXPECT_EQ(call->callee, "foo");
+    ASSERT_EQ(call->arguments.size(), 1);
+
+    auto* right =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            binary->right.get()
+        );
+
+    ASSERT_NE(right, nullptr);
+    EXPECT_EQ(right->value, 2);
+}
+
+
+TEST(ParserTest, CallMissingRightParenthesis) {
+    const std::string_view input =
+        "foo(1";
+
+    compiler::ExprParseResult result =
+        parse_test_expression(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::ParseError>(result)
+    );
+
+    const compiler::ParseError& error =
+        std::get<compiler::ParseError>(result);
+
+    EXPECT_EQ(
+        error.message,
+        "expected ')' after arguments"
+    );
+
+    EXPECT_EQ(error.span.begin, input.size());
+    EXPECT_EQ(error.span.end, input.size());
+}
+
+
+TEST(ParserTest, VariableDeclarationWithInitializer) {
+    const std::string_view input = R"(
+fn main() -> void {
+    let x: i64 = 42;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+
+    const compiler::FunctionDecl& function =
+        program.functions[0];
+
+    EXPECT_EQ(function.name, "main");
+    ASSERT_NE(function.body, nullptr);
+    ASSERT_EQ(function.body->statements.size(), 1);
+
+    auto* declaration =
+        dynamic_cast<compiler::VariableDeclStmt*>(
+            function.body->statements[0].get()
+        );
+
+    ASSERT_NE(declaration, nullptr);
+
+    EXPECT_EQ(declaration->name, "x");
+    EXPECT_EQ(
+        declaration->type.kind,
+        compiler::TypeKind::I64
+    );
+
+    ASSERT_NE(declaration->initializer, nullptr);
+
+    auto* initializer =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            declaration->initializer.get()
+        );
+
+    ASSERT_NE(initializer, nullptr);
+    EXPECT_EQ(initializer->value, 42);
+}
+
+
+TEST(ParserTest, VariableDeclarationWithoutInitializer) {
+    const std::string_view input = R"(
+fn main() -> void {
+    let x: i64;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+
+    const compiler::FunctionDecl& function =
+        program.functions[0];
+
+    ASSERT_NE(function.body, nullptr);
+    ASSERT_EQ(function.body->statements.size(), 1);
+
+    auto* declaration =
+        dynamic_cast<compiler::VariableDeclStmt*>(
+            function.body->statements[0].get()
+        );
+
+    ASSERT_NE(declaration, nullptr);
+
+    EXPECT_EQ(declaration->name, "x");
+    EXPECT_EQ(
+        declaration->type.kind,
+        compiler::TypeKind::I64
+    );
+    EXPECT_EQ(declaration->initializer, nullptr);
+}
+
+
+TEST(ParserTest, AssignmentStatement) {
+    const std::string_view input = R"(
+fn main() -> void {
+    x = 42;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+    ASSERT_EQ(
+        program.functions[0].body->statements.size(),
+        1
+    );
+
+    auto* assignment =
+        dynamic_cast<compiler::AssignmentStmt*>(
+            program.functions[0]
+                .body->statements[0]
+                .get()
+        );
+
+    ASSERT_NE(assignment, nullptr);
+
+    EXPECT_EQ(assignment->name, "x");
+
+    auto* value =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            assignment->value.get()
+        );
+
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(value->value, 42);
+}
+
+
+TEST(ParserTest, ReturnWithValue) {
+    const std::string_view input = R"(
+fn main() -> i64 {
+    return 1 + 2;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+    ASSERT_EQ(
+        program.functions[0].body->statements.size(),
+        1
+    );
+
+    auto* return_stmt =
+        dynamic_cast<compiler::ReturnStmt*>(
+            program.functions[0]
+                .body->statements[0]
+                .get()
+        );
+
+    ASSERT_NE(return_stmt, nullptr);
+    ASSERT_NE(return_stmt->value, nullptr);
+
+    auto* binary =
+        dynamic_cast<compiler::BinaryExpr*>(
+            return_stmt->value.get()
+        );
+
+    ASSERT_NE(binary, nullptr);
+    EXPECT_EQ(binary->op, compiler::BinaryOp::Add);
+
+    auto* left =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            binary->left.get()
+        );
+
+    auto* right =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            binary->right.get()
+        );
+
+    ASSERT_NE(left, nullptr);
+    ASSERT_NE(right, nullptr);
+
+    EXPECT_EQ(left->value, 1);
+    EXPECT_EQ(right->value, 2);
+}
+
+
+TEST(ParserTest, ReturnWithoutValue) {
+    const std::string_view input = R"(
+fn main() -> void {
+    return;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+    ASSERT_EQ(
+        program.functions[0].body->statements.size(),
+        1
+    );
+
+    auto* return_stmt =
+        dynamic_cast<compiler::ReturnStmt*>(
+            program.functions[0]
+                .body->statements[0]
+                .get()
+        );
+
+    ASSERT_NE(return_stmt, nullptr);
+    EXPECT_EQ(return_stmt->value, nullptr);
+}
+
+
+TEST(ParserTest, MultipleStatementsInBlock) {
+    const std::string_view input = R"(
+fn main() -> i64 {
+    let x: i64 = 1;
+    x = x + 1;
+    return x;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+
+    const auto& statements =
+        program.functions[0].body->statements;
+
+    ASSERT_EQ(statements.size(), 3);
+
+    EXPECT_NE(
+        dynamic_cast<compiler::VariableDeclStmt*>(
+            statements[0].get()
+        ),
+        nullptr
+    );
+
+    EXPECT_NE(
+        dynamic_cast<compiler::AssignmentStmt*>(
+            statements[1].get()
+        ),
+        nullptr
+    );
+
+    EXPECT_NE(
+        dynamic_cast<compiler::ReturnStmt*>(
+            statements[2].get()
+        ),
+        nullptr
+    );
+}
+
+
+TEST(ParserTest, IfWithoutElse) {
+    const std::string_view input = R"(
+fn main() -> void {
+    if (true) {
+        return;
+    }
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+    ASSERT_EQ(
+        program.functions[0].body->statements.size(),
+        1
+    );
+
+    auto* if_stmt =
+        dynamic_cast<compiler::IfStmt*>(
+            program.functions[0]
+                .body->statements[0]
+                .get()
+        );
+
+    ASSERT_NE(if_stmt, nullptr);
+
+    auto* condition =
+        dynamic_cast<compiler::BoolLiteralExpr*>(
+            if_stmt->condition.get()
+        );
+
+    ASSERT_NE(condition, nullptr);
+    EXPECT_TRUE(condition->value);
+
+    ASSERT_NE(if_stmt->then_branch, nullptr);
+    EXPECT_EQ(if_stmt->then_branch->statements.size(), 1);
+
+    EXPECT_NE(
+        dynamic_cast<compiler::ReturnStmt*>(
+            if_stmt->then_branch
+                ->statements[0]
+                .get()
+        ),
+        nullptr
+    );
+
+    EXPECT_EQ(if_stmt->else_branch, nullptr);
+}
+
+
+TEST(ParserTest, IfWithElse) {
+    const std::string_view input = R"(
+fn main() -> void {
+    if (true) {
+        return;
+    } else {
+        return;
+    }
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+    ASSERT_EQ(
+        program.functions[0].body->statements.size(),
+        1
+    );
+
+    auto* if_stmt =
+        dynamic_cast<compiler::IfStmt*>(
+            program.functions[0]
+                .body->statements[0]
+                .get()
+        );
+
+    ASSERT_NE(if_stmt, nullptr);
+
+    auto* condition =
+        dynamic_cast<compiler::BoolLiteralExpr*>(
+            if_stmt->condition.get()
+        );
+
+    ASSERT_NE(condition, nullptr);
+    EXPECT_TRUE(condition->value);
+
+    ASSERT_NE(if_stmt->then_branch, nullptr);
+    ASSERT_NE(if_stmt->else_branch, nullptr);
+
+    ASSERT_EQ(
+        if_stmt->then_branch->statements.size(),
+        1
+    );
+
+    ASSERT_EQ(
+        if_stmt->else_branch->statements.size(),
+        1
+    );
+
+    EXPECT_NE(
+        dynamic_cast<compiler::ReturnStmt*>(
+            if_stmt->then_branch
+                ->statements[0]
+                .get()
+        ),
+        nullptr
+    );
+
+    EXPECT_NE(
+        dynamic_cast<compiler::ReturnStmt*>(
+            if_stmt->else_branch
+                ->statements[0]
+                .get()
+        ),
+        nullptr
+    );
+}
+
+
+TEST(ParserTest, WhileStatement) {
+    const std::string_view input = R"(
+fn main() -> void {
+    while (true) {
+        return;
+    }
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+    ASSERT_EQ(
+        program.functions[0].body->statements.size(),
+        1
+    );
+
+    auto* while_stmt =
+        dynamic_cast<compiler::WhileStmt*>(
+            program.functions[0]
+                .body->statements[0]
+                .get()
+        );
+
+    ASSERT_NE(while_stmt, nullptr);
+
+    auto* condition =
+        dynamic_cast<compiler::BoolLiteralExpr*>(
+            while_stmt->condition.get()
+        );
+
+    ASSERT_NE(condition, nullptr);
+    EXPECT_TRUE(condition->value);
+
+    ASSERT_NE(while_stmt->body, nullptr);
+    ASSERT_EQ(while_stmt->body->statements.size(), 1);
+
+    EXPECT_NE(
+        dynamic_cast<compiler::ReturnStmt*>(
+            while_stmt->body
+                ->statements[0]
+                .get()
+        ),
+        nullptr
+    );
+}
+
+
+TEST(ParserTest, FunctionWithParameters) {
+    const std::string_view input = R"(
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+
+    const compiler::FunctionDecl& function =
+        program.functions[0];
+
+    EXPECT_EQ(function.name, "add");
+    ASSERT_EQ(function.parameters.size(), 2);
+
+    EXPECT_EQ(function.parameters[0].name, "a");
+    EXPECT_EQ(
+        function.parameters[0].type.kind,
+        compiler::TypeKind::I64
+    );
+
+    EXPECT_EQ(function.parameters[1].name, "b");
+    EXPECT_EQ(
+        function.parameters[1].type.kind,
+        compiler::TypeKind::I64
+    );
+
+    EXPECT_EQ(
+        function.return_type.kind,
+        compiler::TypeKind::I64
+    );
+
+    ASSERT_NE(function.body, nullptr);
+    ASSERT_EQ(function.body->statements.size(), 1);
+
+    EXPECT_NE(
+        dynamic_cast<compiler::ReturnStmt*>(
+            function.body->statements[0].get()
+        ),
+        nullptr
+    );
+}
+
+
+TEST(ParserTest, MultipleFunctions) {
+    const std::string_view input = R"(
+fn add(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+fn main() -> i64 {
+    return add(1, 2);
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 2);
+
+    EXPECT_EQ(program.functions[0].name, "add");
+    EXPECT_EQ(program.functions[1].name, "main");
+
+    const compiler::FunctionDecl& main_function =
+        program.functions[1];
+
+    ASSERT_NE(main_function.body, nullptr);
+    ASSERT_EQ(main_function.body->statements.size(), 1);
+
+    auto* return_stmt =
+        dynamic_cast<compiler::ReturnStmt*>(
+            main_function.body->statements[0].get()
+        );
+
+    ASSERT_NE(return_stmt, nullptr);
+    ASSERT_NE(return_stmt->value, nullptr);
+
+    auto* call =
+        dynamic_cast<compiler::CallExpr*>(
+            return_stmt->value.get()
+        );
+
+    ASSERT_NE(call, nullptr);
+
+    EXPECT_EQ(call->callee, "add");
+    ASSERT_EQ(call->arguments.size(), 2);
+
+    auto* first =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            call->arguments[0].get()
+        );
+
+    auto* second =
+        dynamic_cast<compiler::IntegerLiteralExpr*>(
+            call->arguments[1].get()
+        );
+
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+
+    EXPECT_EQ(first->value, 1);
+    EXPECT_EQ(second->value, 2);
+}
+
+
+TEST(ParserTest, MissingFunctionArrow) {
+    const std::string_view input = R"(
+fn main() void {
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::ParseError>(result)
+    );
+
+    const compiler::ParseError& error =
+        std::get<compiler::ParseError>(result);
+
+    EXPECT_EQ(
+        error.message,
+        "expected '->' after parameter list"
+    );
+}
+
+
+TEST(ParserTest, MissingVariableColon) {
+    const std::string_view input = R"(
+fn main() -> void {
+    let x i64 = 1;
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::ParseError>(result)
+    );
+
+    const compiler::ParseError& error =
+        std::get<compiler::ParseError>(result);
+
+    EXPECT_EQ(
+        error.message,
+        "expected ':' after variable name"
+    );
+}
+
+
+TEST(ParserTest, MissingReturnSemicolon) {
+    const std::string_view input = R"(
+fn main() -> i64 {
+    return 1
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::ParseError>(result)
+    );
+
+    const compiler::ParseError& error =
+        std::get<compiler::ParseError>(result);
+
+    EXPECT_EQ(
+        error.message,
+        "expected ';' after return statement"
+    );
+}
+
+
+TEST(ParserTest, MissingBlockRightBrace) {
+    const std::string_view input = R"(
+fn main() -> void {
+    return;
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::ParseError>(result)
+    );
+
+    const compiler::ParseError& error =
+        std::get<compiler::ParseError>(result);
+
+    EXPECT_EQ(
+        error.message,
+        "expected '}' after block"
+    );
+
+    EXPECT_EQ(error.span.begin, input.size());
+    EXPECT_EQ(error.span.end, input.size());
+}
+
+
+TEST(ParserTest, InvalidTopLevelStatement) {
+    const std::string_view input =
+        "let x: i64 = 1;";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::ParseError>(result)
+    );
+
+    const compiler::ParseError& error =
+        std::get<compiler::ParseError>(result);
+
+    EXPECT_EQ(
+        error.message,
+        "expected function declaration"
+    );
+
+    EXPECT_EQ(error.span.begin, 0);
+    EXPECT_EQ(error.span.end, 3);
+}
+
+TEST(ParserTest, ExpressionStatement) {
+    const std::string_view input = R"(
+fn main() -> void {
+    foo();
+}
+)";
+
+    compiler::ProgramParseResult result =
+        parse_test_program(input);
+
+    ASSERT_TRUE(
+        std::holds_alternative<compiler::Program>(result)
+    );
+
+    const compiler::Program& program =
+        std::get<compiler::Program>(result);
+
+    ASSERT_EQ(program.functions.size(), 1);
+
+    const compiler::FunctionDecl& function =
+        program.functions[0];
+
+    ASSERT_NE(function.body, nullptr);
+    ASSERT_EQ(function.body->statements.size(), 1);
+
+    auto* expr_stmt =
+        dynamic_cast<compiler::ExprStmt*>(
+            function.body->statements[0].get()
+        );
+
+    ASSERT_NE(expr_stmt, nullptr);
+    ASSERT_NE(expr_stmt->expression, nullptr);
+
+    auto* call =
+        dynamic_cast<compiler::CallExpr*>(
+            expr_stmt->expression.get()
+        );
+
+    ASSERT_NE(call, nullptr);
+
+    EXPECT_EQ(call->callee, "foo");
+    EXPECT_TRUE(call->arguments.empty());
 }
