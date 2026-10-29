@@ -16,6 +16,7 @@ add_library(
     src/lexer/token.cpp
     src/lexer/lexer.cpp
     src/parser/parser.cpp
+    src/semantic/semantic_analyzer.cpp
 )
 
 target_include_directories(
@@ -148,5 +149,30 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(parser_tests)
+
+    # Semantic analysis tests
+    add_executable(
+        semantic_tests
+        tests/semantic_tests.cpp
+    )
+
+    target_link_libraries(
+        semantic_tests
+        PRIVATE
+            compiler_core
+            GTest::gtest_main
+    )
+
+    target_compile_options(
+        semantic_tests
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wconversion
+            -Wsign-conversion
+    )
+
+    gtest_discover_tests(semantic_tests)
 
 endif()
