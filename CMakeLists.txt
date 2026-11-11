@@ -17,6 +17,7 @@ add_library(
     src/lexer/lexer.cpp
     src/parser/parser.cpp
     src/semantic/semantic_analyzer.cpp
+    src/ir/ir_printer.cpp
 )
 
 target_include_directories(
@@ -174,5 +175,19 @@ if(BUILD_TESTING)
     )
 
     gtest_discover_tests(semantic_tests)
+
+    #IR tests
+
+    add_executable(ir_tests
+        tests/ir_tests.cpp
+    )
+
+    target_link_libraries(ir_tests PRIVATE
+        compiler_core
+        GTest::gtest_main
+    )
+
+
+    gtest_discover_tests(ir_tests)
 
 endif()
